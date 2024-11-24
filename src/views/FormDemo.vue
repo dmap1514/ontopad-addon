@@ -20,7 +20,7 @@
                     data-generate-node-shape-reference data-show-node-ids v-bind:data-values="dataTurtle"
                     v-bind:data-shapes="shapeTurtle" v-bind:data-values-subject="dataSubject"></shacl-form>
 
-                <button @click="onDelete" class="delete-button"></button>
+                <button @click="onDelete" class="delete-button">Delete</button>
             </div>
 
         </pane>
@@ -47,6 +47,7 @@ import { Splitpanes, Pane } from 'splitpanes'
 // import * as jsonld from 'jsonld'
 import rdf from '@rdfjs/data-model'
 import InstanceList from '@/components/InstanceList.vue'
+import { validate } from 'uuid'
 
 export default {
     name: 'FormDemo',
@@ -102,36 +103,46 @@ export default {
             }
         },
         async onSubmit() {
-
-            this.resource_iri = this.ensureValidIri(this.resource_iri);
+            console.log(this.resource_iri, this.graph_iri);
 
             const form = this.$refs.myform;
             const quadsString = form.serialize();
             console.log("Formulardaten (serialize):", quadsString);
+
             const parser = new Parser();
             const quads = parser.parse(quadsString);
 
+            let new_iri;
+            let updatedQuads = quads;
+
             if (this.is_class) {
                 console.log("Eine Klasse ist ausgewählt:", this.resource_iri);
+                const resourceEnd = this.getLocalNameFromIri(this.resource_iri);
+
+                const blankNode = this.extractBlankNode(quads);
+                new_iri = `${this.graph_iri}${resourceEnd}/${blankNode}`;
+
+                updatedQuads = this.replaceBlankNodeWithIri(quads, blankNode, new_iri);
+                console.log("Aktualisierte Quads:", updatedQuads);
             } else {
                 console.log("Eine Instanz ist ausgewählt:", this.resource_iri);
                 await this.onDelete();
             }
 
-            await this.store.deleteInsertData({
-                insertArray: quads,  // Übergebe die RDF.js-Tripel
-                graphIri: this.graph_iri // Zielgraph aus dem State
+            await this.store.deleteInsertData({  
+                insertArray: updatedQuads,  
+                graphIri: this.graph_iri 
             });
 
-            console.log("Tripel added", quads);
 
         },
 
+
         async onDelete() {
-            if(this.is_class){
+            if (this.is_class) {
                 console.log("nothing to delete.")
                 return;
-            } 
+            }
             try {
                 console.log('Lösche alle Tripel für die Ressource:', this.resource_iri);
 
@@ -226,24 +237,46 @@ export default {
                 })
             })
         },
-
-        ensureValidIri(iri) {
-            try {
-                // Verwende N3 DataFactory.namedNode, um die Validität zu prüfen
-                return DataFactory.namedNode(iri).value;
-            } catch (error) {
-                console.warn("Ungültige IRI erkannt. Konvertiere zu einer gültigen IRI.");
-
-                // Konvertiere die ungültige IRI zu einer gültigen, z.B. durch Hinzufügen eines Basispfads
-                const basePath = "http://example.org/";
-                const sanitizedIri = encodeURIComponent(iri.trim());
-                const validIri = `${basePath}${sanitizedIri}`;
-
-                console.log("Konvertierte IRI:", validIri);
-
-                // Prüfe erneut, ob die generierte IRI valide ist
-                return DataFactory.namedNode(validIri).value;
+        getLocalNameFromIri(iri) {
+            const parts = iri.split(/[#\/]/); // Teilt bei "/" oder "#"
+            return parts.pop() || null;
+        },
+        validateIri(iri) {
+            if (!validateIRI(iri)) {
+                return null; // Ungültige IRI
             }
+
+            try {
+                DataFactory.namedNode(iri);
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        extractBlankNode(quads) {
+            for (const quad of quads) {
+                if (quad.subject.termType === "BlankNode") {
+                    return quad.subject.value; // Gibt den Identifier des Blank Nodes zurück
+                }
+            }
+            console.warn("Kein Blank Node gefunden!");
+            return "default"; // Rückfallwert, falls kein Blank Node vorhanden ist
+        },
+        replaceBlankNodeWithIri(quads, blankNode, newIri) {
+            const updatedQuads = quads.map((quad) => {
+                const subject = (quad.subject.termType === "BlankNode" && quad.subject.value === blankNode)
+                    ? { termType: "NamedNode", value: newIri }
+                    : quad.subject;
+
+                return {
+                    subject,
+                    predicate: quad.predicate,
+                    object: quad.object,
+                    graph: quad.graph,
+                };
+            });
+
+            return updatedQuads;
         },
     }
 }
